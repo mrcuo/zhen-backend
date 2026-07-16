@@ -1,5 +1,5 @@
 const { kv } = require('@vercel/kv');
-const fetch = require('node-fetch');
+
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 

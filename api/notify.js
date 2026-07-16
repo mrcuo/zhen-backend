@@ -1,10 +1,6 @@
 const AlipaySdk = require('alipay-sdk').default;
 const { kv } = require('@vercel/kv');
 
-const alipaySdk = new AlipaySdk({
-  alipayPublicKey: process.env.ALIPAY_PUBLIC_KEY,
-  camelcase: true,
-});
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -15,7 +11,14 @@ export default async function handler(req, res) {
     const postData = req.body;
     
     // Verify signature
-    const isValid = alipaySdk.checkNotifySign(postData);
+    let isValid = false;
+    if (process.env.ALIPAY_PUBLIC_KEY) {
+      const alipaySdk = new AlipaySdk({
+        alipayPublicKey: process.env.ALIPAY_PUBLIC_KEY,
+        camelcase: true,
+      });
+      isValid = alipaySdk.checkNotifySign(postData);
+    }
     
     if (!isValid) {
       console.error('Invalid Alipay signature');

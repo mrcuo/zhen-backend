@@ -9,14 +9,6 @@ const {
   ALIPAY_PUBLIC_KEY,
 } = process.env;
 
-const alipaySdk = new AlipaySdk({
-  appId: ALIPAY_APP_ID,
-  privateKey: ALIPAY_PRIVATE_KEY,
-  alipayPublicKey: ALIPAY_PUBLIC_KEY,
-  gateway: 'https://openapi.alipay.com/gateway.do', // Use sandbox if needed: https://openapi-sandbox.dl.alipaydev.com/gateway.do
-  timeout: 5000,
-  camelcase: true,
-});
 
 export default async function handler(req, res) {
   // Setup CORS
@@ -54,6 +46,15 @@ export default async function handler(req, res) {
     let qrCodeUrl = '';
 
     if (ALIPAY_APP_ID && ALIPAY_PRIVATE_KEY) {
+      const alipaySdk = new AlipaySdk({
+        appId: ALIPAY_APP_ID,
+        privateKey: ALIPAY_PRIVATE_KEY,
+        alipayPublicKey: ALIPAY_PUBLIC_KEY,
+        gateway: 'https://openapi.alipay.com/gateway.do',
+        timeout: 5000,
+        camelcase: true,
+      });
+
       const result = await alipaySdk.exec('alipay.trade.precreate', {
         notifyUrl: 'https://zhen-backend.vercel.app/api/notify', // Will need to update this URL to actual domain
         bizContent: {
