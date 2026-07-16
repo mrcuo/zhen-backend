@@ -90,6 +90,9 @@ module.exports = async function handler(req, res) {
     });
   } catch (error) {
     console.error('Error in create-order:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    if (error.message && error.message.includes('URL is missing')) {
+      return res.status(500).json({ error: 'KV Database not configured' });
+    }
+    return res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 }
