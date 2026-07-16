@@ -51,19 +51,28 @@ export default async function handler(req, res) {
     }
 
     const outTradeNo = `ZHEN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    let qrCodeUrl = '';
 
-    const result = await alipaySdk.exec('alipay.trade.precreate', {
-      notifyUrl: 'https://zhen-backend.vercel.app/api/notify', // Will need to update this URL to actual domain
-      bizContent: {
-        outTradeNo: outTradeNo,
-        totalAmount: totalAmount,
-        subject: subject,
-      },
-    });
+    if (ALIPAY_APP_ID && ALIPAY_PRIVATE_KEY) {
+      const result = await alipaySdk.exec('alipay.trade.precreate', {
+        notifyUrl: 'https://zhen-backend.vercel.app/api/notify', // Will need to update this URL to actual domain
+        bizContent: {
+          outTradeNo: outTradeNo,
+          totalAmount: totalAmount,
+          subject: subject,
+        },
+      });
 
-    if (result.code !== '10000') {
-      console.error('Alipay error:', result);
-      return res.status(500).json({ error: 'Failed to create order with Alipay' });
+      if (result.code !== '10000') {
+        console.error('Alipay error:', result);
+        return res.status(500).json({ error: 'Failed to create order with Alipay' });
+      }
+      qrCodeUrl = result.qrCode;
+    } else {
+      // Mock mode for testing without real Alipay keys
+      console.log('Running in MOCK mode. Generating fake QR code.');
+      const mockPayUrl = `https://${req.headers.host}/api/mock-pay?orderId=${outTradeNo}`;
+      qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mockPayUrl)}`;
     }
 
     // Save order status in KV
@@ -76,7 +85,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       orderId: outTradeNo,
-      qrCodeUrl: result.qrCode,
+      qrCodeUrl: qrCodeUrl,
     });
   } catch (error) {
     console.error('Error in create-order:', error);
