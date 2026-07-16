@@ -25,10 +25,12 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing deviceId or texts' });
     }
 
-    // Verify if user is premium
-    const device = await kv.get(`device:${deviceId}`);
-    if (!device || device.tier !== 'premium') {
-      return res.status(403).json({ error: 'Forbidden: Requires premium tier' });
+    if (process.env.KV_REST_API_URL) {
+      // Verify if user is premium
+      const device = await kv.get(`device:${deviceId}`);
+      if (!device || device.tier !== 'premium') {
+        return res.status(403).json({ error: 'Forbidden: Requires premium tier' });
+      }
     }
 
     // Translate via DeepSeek V4 (or other best model)
@@ -47,6 +49,11 @@ async function translateWithLLM(texts) {
   
   const separator = '\n\n|||\n\n';
   const joined = texts.join(separator);
+
+  if (!DEEPSEEK_API_KEY) {
+    // Mock translation for demo purposes
+    return texts.map(t => `[Pro] ${t}`);
+  }
 
   const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
