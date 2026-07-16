@@ -76,14 +76,15 @@ module.exports = async function handler(req, res) {
       qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mockPayUrl)}`;
     }
 
-    // Save order status in KV
-    await kv.set(`order:${outTradeNo}`, {
-      deviceId,
-      plan,
-      status: 'pending',
-      createdAt: Date.now()
-    }, { ex: 3600 }); // Expire in 1 hour
-
+    // Save order status in KV (if configured)
+    if (process.env.KV_REST_API_URL) {
+      await kv.set(`order:${outTradeNo}`, {
+        deviceId,
+        plan,
+        status: 'pending',
+        createdAt: Date.now()
+      }, { ex: 3600 }); // Expire in 1 hour
+    }
     return res.status(200).json({
       orderId: outTradeNo,
       qrCodeUrl: qrCodeUrl,

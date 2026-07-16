@@ -22,6 +22,10 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing deviceId' });
     }
 
+    if (!process.env.KV_REST_API_URL) {
+      return res.status(200).json({ tier: 'premium' }); // For demo, always unlock if no KV
+    }
+
     const device = await kv.get(`device:${deviceId}`);
 
     if (!device) {
