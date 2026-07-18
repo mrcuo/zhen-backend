@@ -1,7 +1,12 @@
-const { kv } = require('@vercel/kv');
+const Redis = require('ioredis');
+
+let redis;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL);
+}
 
 module.exports = async function handler(req, res) {
-  // Setup CORS
+  // CORS configuration
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -11,30 +16,29 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+  const { deviceId } = req.query;
+
+  if (!deviceId) {
+    return res.status(400).json({ error: 'deviceId is required' });
   }
 
   try {
-    const { deviceId } = req.query;
-
-    if (!deviceId) {
-      return res.status(400).json({ error: 'Missing deviceId' });
+    if (!redis) {
+      return res.status(200).json({ tier: 'free', debug: 'NO_REDIS_URL_FOUND' });
     }
 
-    if (!process.env.KV_REST_API_URL) {
-      return res.status(200).json({ tier: 'free', debug: 'NO_KV_ENV_FOUND' });
+    const deviceData = await redis.get(`device:${deviceId}`);
+    
+    if (deviceData) {
+      const device = JSON.parse(deviceData);
+      if (device && device.tier) {
+        return res.status(200).json({ tier: device.tier });
+      }
     }
 
-    const device = await kv.get(`device:${deviceId}`);
-
-    if (!device) {
-      return res.status(200).json({ tier: 'free' });
-    }
-
-    return res.status(200).json({ tier: device.tier });
+    return res.status(200).json({ tier: 'free' });
   } catch (error) {
-    console.error('Status Error:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Status check error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }

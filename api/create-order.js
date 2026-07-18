@@ -1,19 +1,17 @@
 const crypto = require('crypto');
+const Redis = require('ioredis');
 
 // XunHuPay (虎皮椒) config
 const XUNHU_APPID = process.env.XUNHU_APPID;
 const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET;
 
-// KV for order storage
-let kv;
-try { kv = require('@vercel/kv').kv; } catch (e) {}
+let redis;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL);
+}
 
 /**
  * Generate XunHuPay MD5 hash signature
- * 1. Sort params by key (ASCII ascending)
- * 2. Join as key1=value1&key2=value2... (skip empty values and 'hash')
- * 3. Append APPSECRET directly (no separator)
- * 4. MD5 → 32-char lowercase hex
  */
 function generateHash(params, appSecret) {
   const keys = Object.keys(params).sort();
@@ -25,7 +23,6 @@ function generateHash(params, appSecret) {
 }
 
 module.exports = async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -50,7 +47,6 @@ module.exports = async function handler(req, res) {
     let qrCodeUrl = '';
 
     if (XUNHU_APPID && XUNHU_APPSECRET) {
-      // ── Real XunHuPay Integration ──
       const params = {
         version: '1.1',
         appid: XUNHU_APPID,
@@ -68,30 +64,26 @@ module.exports = async function handler(req, res) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-
       const data = await response.json();
 
       if (data.errcode) {
         console.error('XunHuPay error:', data);
         return res.status(500).json({ error: 'Payment service error', details: data.errmsg || data.errcode });
       }
-
       qrCodeUrl = data.url_qrcode || data.url || '';
     } else {
-      // ── Mock Mode ──
       console.log('[Mock] No XUNHU keys configured. Using mock QR code.');
       const mockPayUrl = `https://${req.headers.host}/api/mock-pay?orderId=${outTradeNo}&deviceId=${deviceId}`;
       qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mockPayUrl)}`;
     }
 
-    // Save order in KV (if available)
-    if (process.env.KV_REST_API_URL && kv) {
-      await kv.set(`order:${outTradeNo}`, {
+    if (redis) {
+      await redis.set(`order:${outTradeNo}`, JSON.stringify({
         deviceId,
         plan: plan || 'basic',
         status: 'pending',
         createdAt: Date.now()
-      }, { ex: 3600 }); // 1 hour expiry
+      }), 'EX', 3600);
     }
 
     return res.status(200).json({

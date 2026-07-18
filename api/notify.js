@@ -1,15 +1,13 @@
 const crypto = require('crypto');
+const Redis = require('ioredis');
 
-// XunHuPay config
 const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET;
 
-// KV for device activation
-let kv;
-try { kv = require('@vercel/kv').kv; } catch (e) {}
+let redis;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL);
+}
 
-/**
- * Verify XunHuPay callback signature
- */
 function verifyHash(params, appSecret) {
   const receivedHash = params.hash;
   const keys = Object.keys(params).sort();
@@ -22,7 +20,6 @@ function verifyHash(params, appSecret) {
 }
 
 module.exports = async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -39,7 +36,6 @@ module.exports = async function handler(req, res) {
   try {
     const params = req.body;
 
-    // XunHuPay requires us to verify the callback hash
     if (XUNHU_APPSECRET) {
       if (!verifyHash(params, XUNHU_APPSECRET)) {
         console.error('[Notify] Hash verification failed');
@@ -47,41 +43,32 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // Extract order info from callback
     const tradeOrderId = params.trade_order_id;
-    const status = params.status; // 'OD' = success in XunHuPay
+    const status = params.status;
     const paymentSuccess = status === 'OD' || status === 'success';
 
     if (!paymentSuccess) {
-      console.log('[Notify] Payment not successful, status:', status);
-      return res.send('success'); // Acknowledge receipt even if not paid
+      return res.send('success');
     }
 
-    console.log('[Notify] Payment confirmed for order:', tradeOrderId);
-
-    // Look up order in KV to find the deviceId
-    if (process.env.KV_REST_API_URL && kv) {
-      const order = await kv.get(`order:${tradeOrderId}`);
-      if (order && order.deviceId) {
-        // Activate the user's device
-        await kv.set(`device:${order.deviceId}`, {
-          tier: 'basic',
-          paidAt: Date.now(),
-          orderId: tradeOrderId
-        });
-        // Update order status
-        await kv.set(`order:${tradeOrderId}`, {
-          ...order,
-          status: 'success'
-        }, { ex: 3600 * 24 * 30 }); // Keep for 30 days
-
-        console.log('[Notify] Device activated:', order.deviceId);
-      } else {
-        console.error('[Notify] Order not found in KV:', tradeOrderId);
+    if (redis) {
+      const orderData = await redis.get(`order:${tradeOrderId}`);
+      if (orderData) {
+        const order = JSON.parse(orderData);
+        if (order.deviceId) {
+          await redis.set(`device:${order.deviceId}`, JSON.stringify({
+            tier: 'basic',
+            paidAt: Date.now(),
+            orderId: tradeOrderId
+          }));
+          await redis.set(`order:${tradeOrderId}`, JSON.stringify({
+            ...order,
+            status: 'success'
+          }), 'EX', 3600 * 24 * 30);
+        }
       }
     }
 
-    // XunHuPay requires returning the string "success" to acknowledge
     return res.send('success');
   } catch (error) {
     console.error('Notify Error:', error);

@@ -1,5 +1,9 @@
-let kv;
-try { kv = require('@vercel/kv').kv; } catch (e) {}
+const Redis = require('ioredis');
+
+let redis;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL);
+}
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -13,18 +17,21 @@ module.exports = async function handler(req, res) {
       return res.status(400).send('Missing orderId');
     }
 
-    // Activate the device in KV if available
-    if (process.env.KV_REST_API_URL && kv) {
-      const order = await kv.get(`order:${orderId}`);
+    // Activate the device in Redis if available
+    if (redis) {
+      const orderData = await redis.get(`order:${orderId}`);
+      const order = orderData ? JSON.parse(orderData) : null;
+      
       const targetDeviceId = order?.deviceId || deviceId;
       if (targetDeviceId) {
-        await kv.set(`device:${targetDeviceId}`, {
+        await redis.set(`device:${targetDeviceId}`, JSON.stringify({
           tier: 'basic',
           paidAt: Date.now(),
           orderId: orderId
-        });
+        }));
+        
         if (order) {
-          await kv.set(`order:${orderId}`, { ...order, status: 'success' }, { ex: 3600 * 24 * 7 });
+          await redis.set(`order:${orderId}`, JSON.stringify({ ...order, status: 'success' }), 'EX', 3600 * 24 * 7);
         }
       }
     }
