@@ -1,17 +1,31 @@
-const AlipaySdk = require('alipay-sdk').default;
-const { kv } = require('@vercel/kv');
 const crypto = require('crypto');
 
-// Check env vars
-const {
-  ALIPAY_APP_ID,
-  ALIPAY_PRIVATE_KEY,
-  ALIPAY_PUBLIC_KEY,
-} = process.env;
+// XunHuPay (虎皮椒) config
+const XUNHU_APPID = process.env.XUNHU_APPID;
+const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET;
 
+// KV for order storage
+let kv;
+try { kv = require('@vercel/kv').kv; } catch (e) {}
+
+/**
+ * Generate XunHuPay MD5 hash signature
+ * 1. Sort params by key (ASCII ascending)
+ * 2. Join as key1=value1&key2=value2... (skip empty values and 'hash')
+ * 3. Append APPSECRET directly (no separator)
+ * 4. MD5 → 32-char lowercase hex
+ */
+function generateHash(params, appSecret) {
+  const keys = Object.keys(params).sort();
+  const parts = keys
+    .filter(k => k !== 'hash' && params[k] !== null && params[k] !== '' && params[k] !== undefined)
+    .map(k => `${k}=${params[k]}`);
+  const signStr = parts.join('&') + appSecret;
+  return crypto.createHash('md5').update(signStr).digest('hex');
+}
 
 module.exports = async function handler(req, res) {
-  // Setup CORS
+  // CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -28,72 +42,64 @@ module.exports = async function handler(req, res) {
   try {
     const { deviceId, plan } = req.body;
 
-    if (!deviceId || !plan) {
-      return res.status(400).json({ error: 'Missing deviceId or plan' });
-    }
-
-    let totalAmount = '9.90';
-    let subject = 'Zhen · 国翻 基础版 (终身)';
-
-    if (plan === 'premium') {
-      totalAmount = '6.90'; // First month or monthly subscription via other API, but for now we'll just mock it.
-      subject = 'Zhen · 国翻 进阶版 (首月)';
-      // Note: for auto-renewal, Alipay requires specific cycle deduction APIs.
-      // We'll use standard precreate here for simplicity in this demo.
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Missing deviceId' });
     }
 
     const outTradeNo = `ZHEN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     let qrCodeUrl = '';
 
-    if (ALIPAY_APP_ID && ALIPAY_PRIVATE_KEY) {
-      const alipaySdk = new AlipaySdk({
-        appId: ALIPAY_APP_ID,
-        privateKey: ALIPAY_PRIVATE_KEY,
-        alipayPublicKey: ALIPAY_PUBLIC_KEY,
-        gateway: 'https://openapi.alipay.com/gateway.do',
-        timeout: 5000,
-        camelcase: true,
+    if (XUNHU_APPID && XUNHU_APPSECRET) {
+      // ── Real XunHuPay Integration ──
+      const params = {
+        version: '1.1',
+        appid: XUNHU_APPID,
+        trade_order_id: outTradeNo,
+        total_fee: '9.90',
+        title: 'Zhen · 国翻 买断版（终身）',
+        time: Math.floor(Date.now() / 1000).toString(),
+        notify_url: `https://${req.headers.host}/api/notify`,
+        nonce_str: crypto.randomBytes(16).toString('hex'),
+      };
+      params.hash = generateHash(params, XUNHU_APPSECRET);
+
+      const response = await fetch('https://api.xunhupay.com/payment/do.html', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
       });
 
-      const result = await alipaySdk.exec('alipay.trade.precreate', {
-        notifyUrl: 'https://zhen-backend.vercel.app/api/notify', // Will need to update this URL to actual domain
-        bizContent: {
-          outTradeNo: outTradeNo,
-          totalAmount: totalAmount,
-          subject: subject,
-        },
-      });
+      const data = await response.json();
 
-      if (result.code !== '10000') {
-        console.error('Alipay error:', result);
-        return res.status(500).json({ error: 'Failed to create order with Alipay' });
+      if (data.errcode) {
+        console.error('XunHuPay error:', data);
+        return res.status(500).json({ error: 'Payment service error', details: data.errmsg || data.errcode });
       }
-      qrCodeUrl = result.qrCode;
+
+      qrCodeUrl = data.url_qrcode || data.url || '';
     } else {
-      // Mock mode for testing without real Alipay keys
-      console.log('Running in MOCK mode. Generating fake QR code.');
-      const mockPayUrl = `https://${req.headers.host}/api/mock-pay?orderId=${outTradeNo}`;
+      // ── Mock Mode ──
+      console.log('[Mock] No XUNHU keys configured. Using mock QR code.');
+      const mockPayUrl = `https://${req.headers.host}/api/mock-pay?orderId=${outTradeNo}&deviceId=${deviceId}`;
       qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mockPayUrl)}`;
     }
 
-    // Save order status in KV (if configured)
-    if (process.env.KV_REST_API_URL) {
+    // Save order in KV (if available)
+    if (process.env.KV_REST_API_URL && kv) {
       await kv.set(`order:${outTradeNo}`, {
         deviceId,
-        plan,
+        plan: plan || 'basic',
         status: 'pending',
         createdAt: Date.now()
-      }, { ex: 3600 }); // Expire in 1 hour
+      }, { ex: 3600 }); // 1 hour expiry
     }
+
     return res.status(200).json({
       orderId: outTradeNo,
       qrCodeUrl: qrCodeUrl,
     });
   } catch (error) {
-    console.error('Error in create-order:', error);
-    if (error.message && error.message.includes('URL is missing')) {
-      return res.status(500).json({ error: 'KV Database not configured' });
-    }
+    console.error('Create Order Error:', error);
     return res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 }

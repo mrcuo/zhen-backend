@@ -23,7 +23,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (!process.env.KV_REST_API_URL) {
-      return res.status(200).json({ tier: 'premium' }); // For demo, always unlock if no KV
+      return res.status(200).json({ tier: 'free' }); // No KV configured, default to free
     }
 
     const device = await kv.get(`device:${deviceId}`);
