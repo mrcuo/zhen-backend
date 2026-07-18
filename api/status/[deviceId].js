@@ -52,7 +52,16 @@ module.exports = async function handler(req, res) {
 
     const deviceData = await redis.get(`device:${deviceId}`);
     if (deviceData) {
-      const device = JSON.parse(deviceData);
+      let device = JSON.parse(deviceData);
+      
+      // Check for premium expiration
+      if (device.tier === 'premium' && device.expiresAt && Date.now() > device.expiresAt) {
+        // Downgrade to pro
+        device.tier = 'pro';
+        delete device.expiresAt;
+        await redis.set(`device:${deviceId}`, JSON.stringify(device));
+      }
+      
       if (device && device.tier) {
         return res.status(200).json({ tier: device.tier });
       }
@@ -75,22 +84,33 @@ module.exports = async function handler(req, res) {
             if (paidOrder) {
               console.log(`[Status Fallback] Found paid order ${pendingOutTradeNo} via API! Unlocking device ${deviceId}.`);
               
+              let orderPlan = 'basic';
+              
               // Mark order as paid
               const orderStr = await redis.get(`order:${pendingOutTradeNo}`);
               if (orderStr) {
                 const order = JSON.parse(orderStr);
                 order.status = 'paid';
+                orderPlan = order.plan || 'basic';
                 await redis.set(`order:${pendingOutTradeNo}`, JSON.stringify(order), 'EX', 86400 * 7);
               }
               
               // Unlock device
               const newDeviceState = deviceData ? JSON.parse(deviceData) : { deviceId };
-              newDeviceState.tier = 'pro';
+              
+              if (orderPlan === 'premium') {
+                newDeviceState.tier = 'premium';
+                newDeviceState.expiresAt = Date.now() + 31 * 24 * 60 * 60 * 1000;
+              } else {
+                newDeviceState.tier = 'pro';
+                if (newDeviceState.expiresAt) delete newDeviceState.expiresAt;
+              }
+              
               newDeviceState.updatedAt = Date.now();
               await redis.set(`device:${deviceId}`, JSON.stringify(newDeviceState));
               await redis.del(`device_pending_order:${deviceId}`); // Clear pending flag
               
-              return res.status(200).json({ tier: 'pro' });
+              return res.status(200).json({ tier: newDeviceState.tier });
             }
           }
         } catch (pollErr) {

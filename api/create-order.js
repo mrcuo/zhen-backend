@@ -4,6 +4,10 @@ const Redis = require('ioredis');
 // Afdian Config
 const AFDIAN_USER_ID = process.env.AFDIAN_USER_ID;
 
+// Configurable Plan/Item IDs
+const AFDIAN_ITEM_BASIC = process.env.AFDIAN_ITEM_BASIC || '';
+const AFDIAN_PLAN_PREMIUM = process.env.AFDIAN_PLAN_PREMIUM || '';
+
 let redis;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL);
@@ -24,7 +28,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { deviceId, plan } = req.body;
+    const { deviceId, plan = 'basic' } = req.body;
 
     if (!deviceId) {
       return res.status(400).json({ error: 'Missing deviceId' });
@@ -32,11 +36,17 @@ module.exports = async function handler(req, res) {
 
     const outTradeNo = `ZHEN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     let qrCodeUrl = '';
+    let afdianUrl = '';
 
     if (AFDIAN_USER_ID) {
-      // Create Afdian payment URL
-      const afdianUrl = `https://ifdian.net/order/create?user_id=${AFDIAN_USER_ID}&custom_order_id=${outTradeNo}`;
-      // We generate a QR code for this URL using the free qrserver API, so the user can scan it with their phone
+      // Determine Afdian URL based on requested plan
+      if (plan === 'premium' && AFDIAN_PLAN_PREMIUM) {
+        afdianUrl = `https://ifdian.net/order/create?user_id=${AFDIAN_USER_ID}&plan_id=${AFDIAN_PLAN_PREMIUM}&custom_order_id=${outTradeNo}`;
+      } else if (plan === 'basic' && AFDIAN_ITEM_BASIC) {
+        afdianUrl = `https://ifdian.net/order/create?user_id=${AFDIAN_USER_ID}&plan_id=${AFDIAN_ITEM_BASIC}&custom_order_id=${outTradeNo}`;
+      } else {
+        afdianUrl = `https://ifdian.net/order/create?user_id=${AFDIAN_USER_ID}&custom_order_id=${outTradeNo}`;
+      }
       qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(afdianUrl)}`;
     } else {
       console.log('[Mock] No AFDIAN keys configured. Using mock QR code.');

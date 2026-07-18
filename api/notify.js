@@ -89,16 +89,26 @@ module.exports = async function handler(req, res) {
     order.status = 'paid';
     await redis.set(`order:${outTradeNo}`, JSON.stringify(order), 'EX', 86400 * 7);
 
-    // Update device tier to pro
+    // Update device tier to pro or premium
     const deviceKey = `device:${deviceId}`;
     const deviceStr = await redis.get(deviceKey);
     let deviceState = deviceStr ? JSON.parse(deviceStr) : { deviceId };
     
-    deviceState.tier = 'pro';
+    if (order.plan === 'premium') {
+      deviceState.tier = 'premium';
+      deviceState.expiresAt = Date.now() + 31 * 24 * 60 * 60 * 1000; // 31 days
+    } else {
+      deviceState.tier = 'pro';
+      // Basic plan has no expiration
+      if (deviceState.expiresAt) {
+        delete deviceState.expiresAt;
+      }
+    }
+    
     deviceState.updatedAt = Date.now();
     await redis.set(deviceKey, JSON.stringify(deviceState));
     
-    console.log(`[Afdian Webhook] Successfully unlocked device ${deviceId} via order ${outTradeNo}`);
+    console.log(`[Afdian Webhook] Successfully unlocked device ${deviceId} to ${deviceState.tier} via order ${outTradeNo}`);
 
     return res.status(200).json({ ec: 200, em: '' });
   } catch (error) {

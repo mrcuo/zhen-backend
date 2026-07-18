@@ -97,11 +97,23 @@ module.exports = async function handler(req, res) {
     const deviceKey = `device:${deviceId}`;
     const deviceData = await redis.get(deviceKey);
     const newDeviceState = deviceData ? JSON.parse(deviceData) : { deviceId };
-    newDeviceState.tier = 'pro';
+    
+    // Check if the order was for the premium plan
+    const AFDIAN_PLAN_PREMIUM = process.env.AFDIAN_PLAN_PREMIUM || '';
+    if (AFDIAN_PLAN_PREMIUM && paidOrder.plan_id === AFDIAN_PLAN_PREMIUM) {
+      newDeviceState.tier = 'premium';
+      newDeviceState.expiresAt = Date.now() + 31 * 24 * 60 * 60 * 1000;
+    } else {
+      newDeviceState.tier = 'pro';
+      if (newDeviceState.expiresAt) {
+        delete newDeviceState.expiresAt;
+      }
+    }
+    
     newDeviceState.updatedAt = Date.now();
     await redis.set(deviceKey, JSON.stringify(newDeviceState));
 
-    return res.status(200).json({ success: true, tier: 'pro' });
+    return res.status(200).json({ success: true, tier: newDeviceState.tier });
 
   } catch (error) {
     console.error('Restore Purchase error:', error);
