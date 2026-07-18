@@ -1,5 +1,5 @@
 const Redis = require('ioredis');
-const Afdian = require('afdian-api');
+const crypto = require('crypto');
 
 const AFDIAN_USER_ID = process.env.AFDIAN_USER_ID;
 const AFDIAN_TOKEN = process.env.AFDIAN_TOKEN;
@@ -7,6 +7,25 @@ const AFDIAN_TOKEN = process.env.AFDIAN_TOKEN;
 let redis;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL);
+}
+
+async function queryAfdianOrder(page = 1) {
+  const ts = Math.floor(Date.now() / 1000);
+  const paramsStr = JSON.stringify({ page });
+  const signStr = `${AFDIAN_TOKEN}params${paramsStr}ts${ts}user_id${AFDIAN_USER_ID}`;
+  const sign = crypto.createHash('md5').update(signStr).digest('hex');
+
+  const res = await fetch('https://ifdian.net/api/open/query-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: AFDIAN_USER_ID,
+      params: paramsStr,
+      ts,
+      sign
+    })
+  });
+  return res.json();
 }
 
 module.exports = async function handler(req, res) {
@@ -37,8 +56,7 @@ module.exports = async function handler(req, res) {
 
     // Verify order using Afdian API
     if (AFDIAN_USER_ID && AFDIAN_TOKEN) {
-      const afdian = new Afdian({ userId: AFDIAN_USER_ID, token: AFDIAN_TOKEN });
-      const apiRes = await afdian.queryOrder(1);
+      const apiRes = await queryAfdianOrder(1);
       
       let isValid = false;
       if (apiRes && apiRes.data && apiRes.data.list) {

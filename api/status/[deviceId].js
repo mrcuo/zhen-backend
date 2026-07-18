@@ -1,5 +1,5 @@
 const Redis = require('ioredis');
-const Afdian = require('afdian-api');
+const crypto = require('crypto');
 
 const AFDIAN_USER_ID = process.env.AFDIAN_USER_ID;
 const AFDIAN_TOKEN = process.env.AFDIAN_TOKEN;
@@ -7,6 +7,25 @@ const AFDIAN_TOKEN = process.env.AFDIAN_TOKEN;
 let redis;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL);
+}
+
+async function queryAfdianOrder(page = 1) {
+  const ts = Math.floor(Date.now() / 1000);
+  const paramsStr = JSON.stringify({ page });
+  const signStr = `${AFDIAN_TOKEN}params${paramsStr}ts${ts}user_id${AFDIAN_USER_ID}`;
+  const sign = crypto.createHash('md5').update(signStr).digest('hex');
+
+  const res = await fetch('https://ifdian.net/api/open/query-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: AFDIAN_USER_ID,
+      params: paramsStr,
+      ts,
+      sign
+    })
+  });
+  return res.json();
 }
 
 module.exports = async function handler(req, res) {
@@ -40,7 +59,6 @@ module.exports = async function handler(req, res) {
     }
 
     // ── FALLBACK POLLING FOR AFDIAN ──
-    // If webhook failed due to GFW, we can manually check if there's a pending order for this device
     const pendingOutTradeNo = await redis.get(`device_pending_order:${deviceId}`);
     
     if (pendingOutTradeNo && AFDIAN_USER_ID && AFDIAN_TOKEN) {
@@ -50,8 +68,7 @@ module.exports = async function handler(req, res) {
         await redis.set(`afdian_poll_throttle:${deviceId}`, '1', 'EX', 5);
         
         try {
-          const afdian = new Afdian({ userId: AFDIAN_USER_ID, token: AFDIAN_TOKEN });
-          const apiRes = await afdian.queryOrder(1);
+          const apiRes = await queryAfdianOrder(1);
           
           if (apiRes && apiRes.data && apiRes.data.list) {
             const paidOrder = apiRes.data.list.find(o => o.custom_order_id === pendingOutTradeNo || o.out_trade_no === pendingOutTradeNo);
