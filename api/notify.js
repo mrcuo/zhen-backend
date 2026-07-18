@@ -1,77 +1,90 @@
-const crypto = require('crypto');
 const Redis = require('ioredis');
+const Afdian = require('afdian-api');
 
-const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET;
+const AFDIAN_USER_ID = process.env.AFDIAN_USER_ID;
+const AFDIAN_TOKEN = process.env.AFDIAN_TOKEN;
 
 let redis;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL);
 }
 
-function verifyHash(params, appSecret) {
-  const receivedHash = params.hash;
-  const keys = Object.keys(params).sort();
-  const parts = keys
-    .filter(k => k !== 'hash' && params[k] !== null && params[k] !== '' && params[k] !== undefined)
-    .map(k => `${k}=${params[k]}`);
-  const signStr = parts.join('&') + appSecret;
-  const expectedHash = crypto.createHash('md5').update(signStr).digest('hex');
-  return receivedHash === expectedHash;
-}
-
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return res.status(405).send('Method Not Allowed');
   }
 
   try {
-    const params = req.body;
+    const payload = req.body;
+    
+    // Log the payload for debugging
+    console.log('[Afdian Webhook] Received:', JSON.stringify(payload));
 
-    if (XUNHU_APPSECRET) {
-      if (!verifyHash(params, XUNHU_APPSECRET)) {
-        console.error('[Notify] Hash verification failed');
-        return res.status(403).send('Hash verification failed');
+    if (!payload || !payload.data || payload.data.type !== 'order') {
+      return res.status(400).send('Ignore non-order webhook');
+    }
+
+    const orderData = payload.data.order;
+    if (!orderData || orderData.status !== 2) {
+      return res.status(200).send('Order not paid');
+    }
+
+    const outTradeNo = orderData.custom_order_id;
+    if (!outTradeNo || !outTradeNo.startsWith('ZHEN_')) {
+      console.log('Ignored order without valid ZHEN custom_order_id');
+      return res.status(200).send('success');
+    }
+
+    // Verify order using Afdian API
+    if (AFDIAN_USER_ID && AFDIAN_TOKEN) {
+      const afdian = new Afdian({ userId: AFDIAN_USER_ID, token: AFDIAN_TOKEN });
+      const apiRes = await afdian.queryOrder(1);
+      
+      let isValid = false;
+      if (apiRes && apiRes.data && apiRes.data.list) {
+        // Check if the order is in the recent list
+        isValid = apiRes.data.list.some(o => o.out_trade_no === orderData.out_trade_no);
+      }
+      
+      if (!isValid) {
+        console.error('[Afdian Webhook] Security Warning: Order not found in recent API query!');
+        return res.status(400).send('Order verification failed');
       }
     }
 
-    const tradeOrderId = params.trade_order_id;
-    const status = params.status;
-    const paymentSuccess = status === 'OD' || status === 'success';
-
-    if (!paymentSuccess) {
-      return res.send('success');
+    if (!redis) {
+      console.error('Redis not configured, cannot unlock device');
+      return res.status(500).send('Redis error');
     }
 
-    if (redis) {
-      const orderData = await redis.get(`order:${tradeOrderId}`);
-      if (orderData) {
-        const order = JSON.parse(orderData);
-        if (order.deviceId) {
-          await redis.set(`device:${order.deviceId}`, JSON.stringify({
-            tier: 'basic',
-            paidAt: Date.now(),
-            orderId: tradeOrderId
-          }));
-          await redis.set(`order:${tradeOrderId}`, JSON.stringify({
-            ...order,
-            status: 'success'
-          }), 'EX', 3600 * 24 * 30);
-        }
-      }
+    // Retrieve pending order from Redis
+    const orderStr = await redis.get(`order:${outTradeNo}`);
+    if (!orderStr) {
+      console.error(`Order ${outTradeNo} not found in Redis`);
+      return res.status(200).send('success');
     }
 
-    return res.send('success');
+    const order = JSON.parse(orderStr);
+    const deviceId = order.deviceId;
+
+    // Mark order as paid
+    order.status = 'paid';
+    await redis.set(`order:${outTradeNo}`, JSON.stringify(order), 'EX', 86400 * 7);
+
+    // Update device tier to pro
+    const deviceKey = `device:${deviceId}`;
+    const deviceStr = await redis.get(deviceKey);
+    let deviceState = deviceStr ? JSON.parse(deviceStr) : { deviceId };
+    
+    deviceState.tier = 'pro';
+    deviceState.updatedAt = Date.now();
+    await redis.set(deviceKey, JSON.stringify(deviceState));
+    
+    console.log(`[Afdian Webhook] Successfully unlocked device ${deviceId} via order ${outTradeNo}`);
+
+    return res.status(200).json({ ec: 200, em: '' });
   } catch (error) {
-    console.error('Notify Error:', error);
-    return res.status(500).send('error');
+    console.error('[Afdian Webhook Error]:', error);
+    return res.status(500).send('Internal Error');
   }
 }

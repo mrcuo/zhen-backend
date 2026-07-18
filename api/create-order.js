@@ -1,25 +1,12 @@
 const crypto = require('crypto');
 const Redis = require('ioredis');
 
-// XunHuPay (虎皮椒) config
-const XUNHU_APPID = process.env.XUNHU_APPID;
-const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET;
+// Afdian Config
+const AFDIAN_USER_ID = process.env.AFDIAN_USER_ID;
 
 let redis;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL);
-}
-
-/**
- * Generate XunHuPay MD5 hash signature
- */
-function generateHash(params, appSecret) {
-  const keys = Object.keys(params).sort();
-  const parts = keys
-    .filter(k => k !== 'hash' && params[k] !== null && params[k] !== '' && params[k] !== undefined)
-    .map(k => `${k}=${params[k]}`);
-  const signStr = parts.join('&') + appSecret;
-  return crypto.createHash('md5').update(signStr).digest('hex');
 }
 
 module.exports = async function handler(req, res) {
@@ -46,33 +33,13 @@ module.exports = async function handler(req, res) {
     const outTradeNo = `ZHEN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     let qrCodeUrl = '';
 
-    if (XUNHU_APPID && XUNHU_APPSECRET) {
-      const params = {
-        version: '1.1',
-        appid: XUNHU_APPID,
-        trade_order_id: outTradeNo,
-        total_fee: '9.90',
-        title: 'Zhen · 国翻 买断版（终身）',
-        time: Math.floor(Date.now() / 1000).toString(),
-        notify_url: `https://${req.headers.host}/api/notify`,
-        nonce_str: crypto.randomBytes(16).toString('hex'),
-      };
-      params.hash = generateHash(params, XUNHU_APPSECRET);
-
-      const response = await fetch('https://api.xunhupay.com/payment/do.html', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      const data = await response.json();
-
-      if (data.errcode) {
-        console.error('XunHuPay error:', data);
-        return res.status(500).json({ error: 'Payment service error', details: data.errmsg || data.errcode });
-      }
-      qrCodeUrl = data.url_qrcode || data.url || '';
+    if (AFDIAN_USER_ID) {
+      // Create Afdian payment URL
+      const afdianUrl = `https://ifdian.net/order/create?user_id=${AFDIAN_USER_ID}&custom_order_id=${outTradeNo}`;
+      // We generate a QR code for this URL using the free qrserver API, so the user can scan it with their phone
+      qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(afdianUrl)}`;
     } else {
-      console.log('[Mock] No XUNHU keys configured. Using mock QR code.');
+      console.log('[Mock] No AFDIAN keys configured. Using mock QR code.');
       const mockPayUrl = `https://${req.headers.host}/api/mock-pay?orderId=${outTradeNo}&deviceId=${deviceId}`;
       qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(mockPayUrl)}`;
     }
