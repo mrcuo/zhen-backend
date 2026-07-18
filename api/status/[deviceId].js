@@ -42,3 +42,4 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+// Force rebuild Sat Jul 18 08:56:41 CST 2026
