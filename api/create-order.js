@@ -45,12 +45,16 @@ module.exports = async function handler(req, res) {
     }
 
     if (redis) {
+      // Store the order details
       await redis.set(`order:${outTradeNo}`, JSON.stringify({
         deviceId,
         plan: plan || 'basic',
         status: 'pending',
         createdAt: Date.now()
       }), 'EX', 3600);
+      
+      // Store a mapping from deviceId to outTradeNo so status endpoint can poll Afdian as a fallback
+      await redis.set(`device_pending_order:${deviceId}`, outTradeNo, 'EX', 3600);
     }
 
     return res.status(200).json({
